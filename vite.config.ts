@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: false,
+    allowedHosts: ["true-choice-gfcp.onrender.com"],
     // Proxy to avoid CORS issues - routes to backend without /api prefix
     proxy: {
       '/user': {
