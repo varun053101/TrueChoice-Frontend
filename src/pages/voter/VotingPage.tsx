@@ -72,20 +72,7 @@ export default function VotingPage() {
     );
   }
 
-  if (alreadyVoted) {
-    return (
-      <DashboardLayout>
-        <div className="text-center py-12">
-          <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-20 h-20 rounded-full bg-status-ongoing/20 flex items-center justify-center mx-auto mb-6">
-            <CheckCircle className="w-10 h-10 text-status-ongoing" />
-          </motion.div>
-          <h1 className="text-2xl font-bold mb-2">Vote Submitted!</h1>
-          <p className="text-muted-foreground mb-6">Thank you for participating. Your vote has been recorded.</p>
-          <Button onClick={() => navigate('/dashboard')}><ArrowLeft className="w-4 h-4 mr-2" /> Back to Dashboard</Button>
-        </div>
-      </DashboardLayout>
-    );
-  }
+
 
   if (election.status !== 'ongoing') {
     return (
@@ -149,6 +136,22 @@ export default function VotingPage() {
           )}
         </div>
       </div>
+
+      {/* Success Message */}
+      {alreadyVoted && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+          <Card className="border-status-ongoing/50 bg-status-ongoing/10">
+            <CardContent className="py-4">
+              <div className="flex items-center gap-3">
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-6 h-6 rounded-full bg-status-ongoing flex items-center justify-center flex-shrink-0">
+                  <CheckCircle className="w-4 h-4 text-primary-foreground" />
+                </motion.div>
+                <p className="text-sm font-medium">Your vote has been submitted successfully! Thank you for participating.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
 
       {/* Instructions */}
       <Card className="mb-8 border-primary/20 bg-primary/5">
@@ -214,10 +217,12 @@ export default function VotingPage() {
           variant="hero"
           size="xl"
           onClick={handleVote}
-          disabled={castVoteMutation.isPending}
+          disabled={castVoteMutation.isPending || alreadyVoted}
           className="min-w-[200px]"
         >
-          {castVoteMutation.isPending ? (
+          {alreadyVoted ? (
+            <><CheckCircle className="w-5 h-5" /> Vote Submitted</>
+          ) : castVoteMutation.isPending ? (
             <><Loader2 className="w-5 h-5 animate-spin" /> Submitting...</>
           ) : (
             <><Vote className="w-5 h-5" /> Submit Vote</>
