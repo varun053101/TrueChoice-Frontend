@@ -59,6 +59,7 @@ export default function Login() {
   };
 
   const demoAccounts = [
+    { role: 'User', email: 'user@gmail.com', password: 'user@1234', color: 'border-green-500/40 bg-green-500/5' },
     { role: 'Admin', email: 'admin@gmail.com', password: 'admin@123', color: 'border-blue-500/40 bg-blue-500/5' },
     { role: 'Superadmin', email: 'superadmin@gmail.com', password: 'superadmin@123', color: 'border-purple-500/40 bg-purple-500/5' },
   ];
