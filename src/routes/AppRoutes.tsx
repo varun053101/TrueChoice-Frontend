@@ -18,7 +18,9 @@ const AdminDashboard = lazy(() => import('@/pages/admin/Dashboard'));
 const AdminElections = lazy(() => import('@/pages/admin/Elections'));
 const CreateElection = lazy(() => import('@/pages/admin/CreateElection'));
 const ManageElection = lazy(() => import('@/pages/admin/ManageElection'));
+const AdminProfile = lazy(() => import('@/pages/admin/Profile'));
 const SuperAdminDashboard = lazy(() => import('@/pages/superadmin/Dashboard'));
+const SuperAdminProfile = lazy(() => import('@/pages/superadmin/Profile'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 function SmartRedirect() {
@@ -130,6 +132,14 @@ export function AppRoutes() {
                         </ProtectedRoute>
                     }
                 />
+                <Route
+                    path="/admin/profile"
+                    element={
+                        <ProtectedRoute requiredRole={['admin', 'superadmin']}>
+                            <AdminProfile />
+                        </ProtectedRoute>
+                    }
+                />
 
                 {/* Superadmin Routes */}
                 <Route
@@ -137,6 +147,14 @@ export function AppRoutes() {
                     element={
                         <ProtectedRoute requiredRole="superadmin">
                             <SuperAdminDashboard />
+                        </ProtectedRoute>
+                    }
+                />
+                <Route
+                    path="/superadmin/profile"
+                    element={
+                        <ProtectedRoute requiredRole="superadmin">
+                            <SuperAdminProfile />
                         </ProtectedRoute>
                     }
                 />

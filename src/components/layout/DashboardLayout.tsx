@@ -28,6 +28,7 @@ const adminNavItems = [
   { to: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/admin/elections', icon: CheckSquare, label: 'Elections' },
   { to: '/admin/elections/new', icon: PlusCircle, label: 'Create Election' },
+  { to: '/admin/profile', icon: User, label: 'Profile' },
 ];
 
 const superadminNavItems = [
@@ -35,6 +36,7 @@ const superadminNavItems = [
   { to: '/admin/elections', icon: CheckSquare, label: 'Elections' },
   { to: '/admin/elections/new', icon: PlusCircle, label: 'Create Election' },
   { to: '/superadmin', icon: Crown, label: 'Superadmin' },
+  { to: '/superadmin/profile', icon: User, label: 'Profile' },
 ];
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {

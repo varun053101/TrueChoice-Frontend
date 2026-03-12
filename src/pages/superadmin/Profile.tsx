@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { authAPI } from '@/services/api';
 
-export default function Profile() {
+export default function SuperAdminProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
@@ -35,7 +35,7 @@ export default function Profile() {
   });
 
   // Debug: log user object
-  console.log('Profile - User object:', user);
+  console.log('SuperAdmin Profile - User object:', user);
 
   const handleResetPassword = async () => {
     // Validation
@@ -98,10 +98,10 @@ export default function Profile() {
                 <User className="w-10 h-10 text-primary" />
               </div>
               <div>
-                <CardTitle className="text-2xl">{user?.name || 'User'}</CardTitle>
+                <CardTitle className="text-2xl">{user?.name || 'SuperAdmin'}</CardTitle>
                 <CardDescription className="flex items-center gap-2 mt-1">
                   <Badge variant="secondary" className="capitalize">
-                    {user?.role || 'Voter'}
+                    {user?.role || 'SuperAdmin'}
                   </Badge>
                 </CardDescription>
               </div>
