@@ -27,21 +27,21 @@ export default function Landing() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent" />
 
         {/* Navigation */}
-        <nav className="relative z-10 container mx-auto px-4 py-6">
+        <nav className="relative z-10 container mx-auto px-4 py-5 sm:py-6">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center">
                 <img src="/logo.png" alt="TrueChoice Logo" className="w-full h-full object-contain" />
               </div>
-              <span className="text-2xl font-heading font-bold">TrueChoice</span>
+              <span className="text-xl sm:text-2xl font-heading font-bold">TrueChoice</span>
             </Link>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <Link to="/login">
-                <Button variant="ghost" size="lg">Sign In</Button>
+                <Button variant="ghost" size="sm" className="sm:text-sm">Sign In</Button>
               </Link>
               <Link to="/register">
-                <Button variant="hero" size="lg">Get Started</Button>
+                <Button variant="hero" size="sm" className="sm:text-sm">Get Started</Button>
               </Link>
             </div>
           </div>
