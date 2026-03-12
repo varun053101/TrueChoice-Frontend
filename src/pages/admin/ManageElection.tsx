@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { DashboardLayout } from '@/components/DashboardLayout';
-import { StatusBadge } from '@/components/StatusBadge';
+import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { StatusBadge } from '@/components/common/StatusBadge';
 import { adminAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +22,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import type { Election, Candidate } from '@/types';
+import { useAdminElection, useAdminCandidates, useAdminResults, useQueryInvalidation } from '@/hooks/useQueries';
+import { ManageElectionSkeleton } from '@/components/common/Skeletons';
 import {
   ArrowLeft,
   Play,
@@ -44,14 +46,67 @@ import { exportElectionResultsToPDF } from '@/utils/pdfExport';
 import { formatDate, formatForInput, dateInputToUTC } from '@/utils/dateUtils';
 
 export default function ManageElection() {
-  const { electionId } = useParams();
+  const { electionId: rawElectionId, '*': splatRest } = useParams();
+  // Reconstruct the full election ID — IDs may contain '/' which splits across
+  // the :electionId param and the splat wildcard (/*) in the route.
+  const electionId = rawElectionId
+    ? splatRest
+      ? `${decodeURIComponent(rawElectionId)}/${splatRest}`
+      : decodeURIComponent(rawElectionId)
+    : undefined;
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const [election, setElection] = useState<Election | null>(null);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [eligibleCount, setEligibleCount] = useState<number>(0);
-  const [loading, setLoading] = useState(true);
+  const { data: electionData, isLoading: loadingElection } = useAdminElection(electionId);
+  const { data: candidatesData = [], isLoading: loadingCandidates } = useAdminCandidates(electionId);
+  const { data: resultsData } = useAdminResults(
+    electionId,
+    ['closed', 'Closed'].includes(electionData?.election?.status ?? '')
+  );
+  const { invalidateAdminElection, invalidateAdminCandidates } = useQueryInvalidation();
+
+  const loading = loadingElection || loadingCandidates;
+
+  const rawElection = electionData?.election;
+  const election = rawElection ? {
+    ...rawElection,
+    id: rawElection._id || rawElection.id,
+  } as Election : null;
+
+  const eligibleCount = electionData?.stats?.eligibleCount || electionData?.eligibleCount || 0;
+
+  // Merge results into candidates list if closed
+  // Use backend-calculated percentages when available.
+  const totalVotesFromAdminResults =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (resultsData as any)?.totalVotes ?? 0;
+
+  const candidates: Candidate[] = candidatesData.map((cand: any) => {
+    let votes = 0;
+    let percentage = 0;
+    const electionStatus = (election?.status ?? '').toLowerCase();
+    if (electionStatus === 'closed' && (resultsData as any)?.results) {
+      // Use String() to safely compare MongoDB ObjectIds (may be object or string)
+      const candIdStr = String(cand.id || cand._id || '');
+      const match = (resultsData as any).results.find(
+        (r: any) => String(r.candidateId) === candIdStr
+      );
+      if (match) {
+        votes = match.votes ?? match.voteCount ?? 0;
+        percentage =
+          typeof match.percentage === 'number'
+            ? match.percentage
+            : totalVotesFromAdminResults > 0
+              ? Number(((votes / totalVotesFromAdminResults) * 100).toFixed(2))
+              : 0;
+      }
+    }
+    return { ...cand, votes, percentage };
+  }).sort((a: any, b: any) => {
+    if ((election?.status ?? '').toLowerCase() === 'closed') return b.votes - a.votes;
+    return 0;
+  });
+
   const [newCandidate, setNewCandidate] = useState({ name: '', manifesto: '' });
   const [isAddingCandidate, setIsAddingCandidate] = useState(false);
   const [deletingCandidateId, setDeletingCandidateId] = useState<string | null>(null);
@@ -73,92 +128,30 @@ export default function ManageElection() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
 
+  // Initialize form when election data loads
   useEffect(() => {
-    if (!electionId) return;
-
-    const loadElection = async () => {
-      setLoading(true);
-      try {
-        // Backend returns: { election, stats: { totalCandidates, totalVotes }, candidates }
-        const electionRes = await adminAPI.getElection(electionId);
-
-        // Parse election data - backend returns full election object
-        const electionData = electionRes.election;
-        if (electionData) {
-          // Convert _id to id if needed, handle date formatting
-          const formattedElection = {
-            ...electionData,
-            id: electionData._id || electionData.id,
-            startTime: electionData.startTime,
-            endTime: electionData.endTime,
+    if (election) {
+      setSettingsForm(prev => {
+        // Only initialize if it's completely empty (first load)
+        if (!prev.title && !prev.positionName && !prev.startTime) {
+          return {
+            title: election.title || '',
+            positionName: election.positionName || '',
+            description: election.description || '',
+            startTime: formatForInput(election.startTime),
+            endTime: formatForInput(election.endTime),
           };
-          setElection(formattedElection as Election);
-
-          // Set settings form values
-          setSettingsForm({
-            title: electionData.title || '',
-            positionName: electionData.positionName || '',
-            description: electionData.description || '',
-            startTime: formatForInput(electionData.startTime),
-            endTime: formatForInput(electionData.endTime),
-          });
         }
-
-        // Candidates are included in the response - normalize IDs
-        let candidatesData = (electionRes.candidates || []).map((c: any) => ({
-          ...c,
-          id: c._id || c.id,
-          votes: 0 // Initialize to 0, will be updated if results are available
-        }));
-
-        // If election is closed, fetch separate results to get vote counts
-        if (electionData.status === 'closed') {
-          try {
-            const resultsRes = await adminAPI.getElectionResults(electionId!);
-            // resultsRes: { totalVotes, results: [{ candidateId, votes, percentage, ... }] }
-            if (resultsRes && resultsRes.results) {
-              // Merge vote counts into candidatesData
-              candidatesData = candidatesData.map((cand: any) => {
-                const match = resultsRes.results.find((r: any) => r.candidateId === cand.id);
-                return match ? { ...cand, votes: match.votes } : { ...cand, votes: 0 };
-              });
-
-              // Sort by votes descending for closed elections
-              candidatesData.sort((a: any, b: any) => b.votes - a.votes);
-            }
-          } catch (resErr) {
-            console.error('Failed to load election results:', resErr);
-          }
-        }
-
-        setCandidates(candidatesData);
-
-        // Set eligible voter count from stats (backend now includes this)
-        const voterCount = electionRes.stats?.eligibleCount || electionRes.eligibleCount || 0;
-        setEligibleCount(voterCount);
-      } catch (err: any) {
-        console.error('Failed to load election:', err);
-        toast({
-          title: 'Failed to load election',
-          description: err?.response?.data?.error || err?.message || 'An error occurred',
-          variant: 'destructive',
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadElection();
-  }, [electionId, toast]);
+        return prev;
+      });
+    }
+  }, [election?.id, election?.title, election?.positionName, election?.description, election?.startTime, election?.endTime]);
 
 
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="text-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-muted-foreground">Loading election...</p>
-        </div>
+        <ManageElectionSkeleton />
       </DashboardLayout>
     );
   }
@@ -188,23 +181,14 @@ export default function ManageElection() {
         title: 'Election Started',
         description: res?.message || 'The election is now accepting votes.',
       });
-
-      // Reload election data
-      const updatedElection = await adminAPI.getElection(electionId);
-      const electionData = updatedElection.election;
-      if (electionData) {
-        setElection({
-          ...electionData,
-          id: electionData._id || electionData.id,
-        } as Election);
-      }
+      if (electionId) invalidateAdminElection(electionId);
 
       setShowForceStartDialog(false);
     } catch (err: any) {
       console.error('Force start error:', err);
       toast({
         title: 'Failed to start election',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -222,23 +206,14 @@ export default function ManageElection() {
         title: 'Election Closed',
         description: res?.message || 'The election has been closed.',
       });
-
-      // Reload election data
-      const updatedElection = await adminAPI.getElection(electionId);
-      const electionData = updatedElection.election;
-      if (electionData) {
-        setElection({
-          ...electionData,
-          id: electionData._id || electionData.id,
-        } as Election);
-      }
+      if (electionId) invalidateAdminElection(electionId);
 
       setShowForceCloseDialog(false);
     } catch (err: any) {
       console.error('Force close error:', err);
       toast({
         title: 'Failed to close election',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -255,21 +230,12 @@ export default function ManageElection() {
         title: 'Results Published',
         description: res?.message || 'Results are now visible to voters.',
       });
-
-      // Reload election data
-      const updatedElection = await adminAPI.getElection(electionId);
-      const electionData = updatedElection.election;
-      if (electionData) {
-        setElection({
-          ...electionData,
-          id: electionData._id || electionData.id,
-        } as Election);
-      }
+      if (electionId) invalidateAdminElection(electionId);
     } catch (err: any) {
       console.error('Publish results error:', err);
       toast({
         title: 'Failed to publish results',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     }
@@ -317,28 +283,13 @@ export default function ManageElection() {
         title: 'Settings saved',
         description: res?.message || 'Election settings updated successfully.',
       });
-
-      // Reload election data
-      const updatedElection = await adminAPI.getElection(electionId);
-      const electionData = updatedElection.election;
-      if (electionData) {
-        setElection({
-          ...electionData,
-          id: electionData._id || electionData.id,
-        } as Election);
-        setSettingsForm({
-          title: electionData.title || '',
-          positionName: electionData.positionName || '',
-          description: electionData.description || '',
-          startTime: formatForInput(electionData.startTime),
-          endTime: formatForInput(electionData.endTime),
-        });
-      }
+      if (electionId) invalidateAdminElection(electionId);
+      // Let the useEffect handle the settingsForm update when election changes
     } catch (err: any) {
       console.error('Save settings error:', err);
       toast({
         title: 'Failed to save settings',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -391,30 +342,19 @@ export default function ManageElection() {
 
     setIsScheduling(true);
     try {
-      const res = await adminAPI.scheduleElection(electionId, {
-        startTime: dateInputToUTC(settingsForm.startTime),
-        endTime: dateInputToUTC(settingsForm.endTime),
-      });
+      // Backend uses already-stored startTime/endTime; save settings first if needed
+      const res = await adminAPI.scheduleElection(electionId);
 
       toast({
         title: 'Election scheduled',
         description: res?.message || 'Election has been scheduled successfully.',
       });
-
-      // Reload election data
-      const updatedElection = await adminAPI.getElection(electionId);
-      const electionData = updatedElection.election;
-      if (electionData) {
-        setElection({
-          ...electionData,
-          id: electionData._id || electionData.id,
-        } as Election);
-      }
+      if (electionId) invalidateAdminElection(electionId);
     } catch (err: any) {
       console.error('Schedule election error:', err);
       toast({
         title: 'Failed to schedule election',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -444,21 +384,14 @@ export default function ManageElection() {
         title: 'Candidate Added',
         description: `${newCandidate.name} has been added to the election.`,
       });
-
-      // Reload candidates - backend returns: { election: {...}, totalCandidates, candidates }
-      const candidatesRes = await adminAPI.getCandidates(electionId);
-      const candidatesData = (candidatesRes.candidates || []).map((c: any) => ({
-        ...c,
-        id: c._id || c.id,
-      }));
-      setCandidates(candidatesData);
+      if (electionId) invalidateAdminCandidates(electionId);
 
       setNewCandidate({ name: '', manifesto: '' });
     } catch (err: any) {
       console.error('Add candidate error:', err);
       toast({
         title: 'Failed to add candidate',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -475,18 +408,27 @@ export default function ManageElection() {
     setIsUploadingVoters(true);
     try {
       const res = await adminAPI.uploadVoters(electionId, file);
-      const uploadedCount = res?.uniqueSrns || res?.validSrns || 0;
-      setEligibleCount(uploadedCount);
+      // After API normalization, this is the inner
+      // `{ summary: { uniqueSrns } }` payload, with `message`
+      // merged on when available.
+      const uploadedCount =
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (res as any)?.summary?.uniqueSrns ??
+        // fallback if backend flattens the summary
+        (res as any)?.uniqueSrns ??
+        0;
+      // Refresh eligibleCount by invalidating the election query
+      invalidateAdminElection(electionId);
 
       toast({
         title: 'Voters Uploaded',
-        description: res?.message || `Successfully uploaded ${uploadedCount} eligible voters.`,
+        description: (res as any)?.message || `Successfully uploaded ${uploadedCount} eligible voter${uploadedCount !== 1 ? 's' : ''}.`,
       });
     } catch (err: any) {
       console.error('Upload voters error:', err);
       toast({
         title: 'Failed to upload voters',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -512,19 +454,12 @@ export default function ManageElection() {
         title: 'Candidate Deleted',
         description: 'The candidate has been removed from the election.',
       });
-
-      // Reload candidates
-      const candidatesRes = await adminAPI.getCandidates(electionId);
-      const candidatesData = (candidatesRes.candidates || []).map((c: any) => ({
-        ...c,
-        id: c._id || c.id,
-      }));
-      setCandidates(candidatesData);
+      if (electionId) invalidateAdminCandidates(electionId);
     } catch (err: any) {
       console.error('Delete candidate error:', err);
       toast({
         title: 'Failed to delete candidate',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
+        description: err?.response?.data?.message || err?.message || 'An error occurred',
         variant: 'destructive',
       });
     } finally {
@@ -532,28 +467,14 @@ export default function ManageElection() {
     }
   };
 
-  const handleDeleteElection = async () => {
-    if (!electionId) return;
-
-    setIsDeleting(true);
-    try {
-      await adminAPI.deleteElection(electionId);
-      toast({
-        title: 'Election Deleted',
-        description: 'The election has been permanently deleted.',
-      });
-      navigate('/admin/elections');
-    } catch (err: any) {
-      console.error('Delete election error:', err);
-      toast({
-        title: 'Failed to delete election',
-        description: err?.response?.data?.error || err?.message || 'An error occurred',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsDeleting(false);
-      setShowDeleteDialog(false);
-    }
+  const handleDeleteElection = () => {
+    // DELETE /admin/elections/:id is not implemented in the backend.
+    toast({
+      title: 'Not Supported',
+      description: 'Deleting elections is not currently supported. Please contact your system administrator.',
+      variant: 'destructive',
+    });
+    setShowDeleteDialog(false);
   };
 
   return (
@@ -566,16 +487,16 @@ export default function ManageElection() {
             Back to Elections
           </Button>
 
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div>
-              <div className="flex items-center gap-3 mb-2">
-                <h1 className="text-3xl font-heading font-bold">{election.title}</h1>
+              <div className="flex flex-wrap items-center gap-3 mb-2">
+                <h1 className="text-2xl sm:text-3xl font-heading font-bold">{election.title}</h1>
                 <StatusBadge status={election.status} />
               </div>
-              <p className="text-lg text-muted-foreground">
+              <p className="text-base sm:text-lg text-muted-foreground">
                 Position: {election.positionName}
               </p>
-              <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-muted-foreground">
                 {election.startTime && election.endTime ? (
                   <span className="flex items-center gap-1">
                     <Calendar className="w-4 h-4" />
@@ -599,7 +520,7 @@ export default function ManageElection() {
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {/* Schedule Election - Available for draft elections */}
               {election.status === 'draft' && (
                 <Button
@@ -663,8 +584,9 @@ export default function ManageElection() {
                 </Button>
               )}
 
-              {/* Publish Results - Available for closed elections without public results */}
-              {election.status === 'closed' && !election.publicResults && (
+              {/* Publish Results - Available for closed elections without published results */}
+              {/* Backend stores 'publicResults'; we check both field names for safety */}
+              {election.status === 'closed' && !(election as any).publicResults && !(election as any).publishResults && (
                 <Button variant="hero" onClick={handlePublishResults}>
                   <Eye className="w-4 h-4 mr-2" />
                   Publish Results
@@ -672,17 +594,17 @@ export default function ManageElection() {
               )}
 
               {/* Export PDF - Available for closed elections with published results */}
-              {election.status === 'closed' && election.publicResults && (
+              {election.status === 'closed' && ((election as any).publicResults || (election as any).publishResults) && (
                 <Button
                   variant="outline"
                   onClick={async () => {
                     try {
-                      // Get vote counts from candidates
-                      const totalVotes = candidates.reduce((sum, c) => sum + ((c as any).voteCount || 0), 0);
+                      // votes are merged into candidates via resultsData in the candidates map above
+                      const totalVotes = candidates.reduce((sum, c) => sum + ((c as any).votes || 0), 0);
                       const candidatesWithPercentage = candidates.map((c) => ({
                         displayName: c.displayName,
-                        voteCount: (c as any).voteCount || 0,
-                        percentage: totalVotes > 0 ? Math.round((((c as any).voteCount || 0) / totalVotes) * 100) : 0,
+                        voteCount: (c as any).votes || 0,
+                        percentage: totalVotes > 0 ? Math.round((((c as any).votes || 0) / totalVotes) * 100) : 0,
                       })).sort((a, b) => b.voteCount - a.voteCount);
 
                       exportElectionResultsToPDF({
@@ -782,7 +704,10 @@ export default function ManageElection() {
             {/* Winner Section for Closed Elections */}
             {election.status === 'closed' && candidates.length > 0 && (
               (() => {
-                const totalVotes = candidates.reduce((sum, c) => sum + ((c as any).votes || 0), 0);
+                const totalVotes = candidates.reduce(
+                  (sum, c) => sum + ((c as any).votes || 0),
+                  0
+                );
 
                 if (totalVotes === 0) {
                   return (
@@ -832,15 +757,13 @@ export default function ManageElection() {
                               <p className="text-muted-foreground mb-2">{(candidates[0] as any).manifesto}</p>
                             )}
                             <div className="flex items-center gap-4">
-                              <span className="text-3xl font-bold">{(candidates[0] as any).votes || 0}</span>
+                              <span className="text-3xl font-bold">
+                                {(candidates[0] as any).votes || 0}
+                              </span>
                               <span className="text-muted-foreground">votes</span>
-                              {/* Calculate percentage for winner */}
-                              {(() => {
-                                const total = candidates.reduce((sum, c) => sum + ((c as any).votes || 0), 0);
-                                const winVotes = (candidates[0] as any).votes || 0;
-                                const pct = total > 0 ? Math.round((winVotes / total) * 100) : 0;
-                                return <span className="text-2xl font-bold text-status-ongoing">{pct}%</span>;
-                              })()}
+                              <span className="text-2xl font-bold text-status-ongoing">
+                                {(candidates[0] as any).percentage ?? 0}%
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -854,12 +777,8 @@ export default function ManageElection() {
             {/* Candidates List */}
             <div className="space-y-4">
               {candidates.map((candidate, index) => {
-                // Calculate percentage for results
-                // Calculate percentage for results
-                // Use 'votes' property which we merged in loadElection
-                const totalVotes = candidates.reduce((sum, c) => sum + ((c as any).votes || 0), 0);
                 const voteCount = (candidate as any).votes || 0;
-                const percentage = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                const percentage = (candidate as any).percentage ?? 0;
 
                 return (
                   <motion.div
